@@ -9,12 +9,18 @@
 #define R_STRING_MAX_UNI_BLOCKS 4
 
 static RBinClass *__getClass(RBinFile *bf, const char *name) {
-	r_return_val_if_fail (bf && bf->bo && bf->bo->classes_ht && name, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->classes_ht && name, NULL);
+#if R2_USE_NEW_ABI
+	void *htidxptr = ht_pp_find (bf->bo->classes_ht, name, NULL);
+	int htidx = (int)(size_t)htidxptr;
+	return RVecRBinClass_at (&bf->bo->classes, htidx - 1);
+#else
 	return ht_pp_find (bf->bo->classes_ht, name, NULL);
+#endif
 }
 
 static RBinSymbol *__getMethod(RBinFile *bf, const char *klass, const char *method) {
-	r_return_val_if_fail (bf && bf->bo && bf->bo->methods_ht && klass && method, NULL);
+	R_RETURN_VAL_IF_FAIL (bf && bf->bo && bf->bo->methods_ht && klass && method, NULL);
 	r_strf_var (name, 128, "%s::%s", klass, method);
 	return ht_pp_find (bf->bo->methods_ht, name, NULL);
 }
@@ -1089,19 +1095,35 @@ R_API RBinClass *r_bin_class_new(const char *name, const char *super, ut64 attr)
 	return c;
 }
 
-R_API void r_bin_class_free(RBinClass *k) {
+#if R2_USE_NEW_ABI
+R_API void r_bin_class_fini(RBinClass *k) {
 	if (k) {
 		free (k->name);
 		r_list_free (k->super);
 		free (k->visibility_str);
 		r_list_free (k->methods);
 		r_list_free (k->fields);
+	}
+}
+#else
+static inline void r_bin_class_fini(RBinClass *k) {
+	free (k->name);
+	r_list_free (k->super);
+	free (k->visibility_str);
+	r_list_free (k->methods);
+	r_list_free (k->fields);
+}
+#endif
+
+R_API void r_bin_class_free(RBinClass *k) {
+	if (k) {
+		r_bin_class_fini (k),
 		free (k);
 	}
 }
 
 R_API RBinClass *r_bin_file_add_class(RBinFile *bf, const char *name, const char *super, ut64 attr) {
-	r_return_val_if_fail (name && bf && bf->bo, NULL);
+	R_RETURN_VAL_IF_FAIL (name && bf && bf->bo, NULL);
 	RBinClass *c = __getClass (bf, name);
 	if (c) {
 		if (R_STR_ISNOTEMPTY (super)) {
@@ -1113,16 +1135,27 @@ R_API RBinClass *r_bin_file_add_class(RBinFile *bf, const char *name, const char
 	}
 	c = r_bin_class_new (name, super, attr);
 	if (c) {
+#if R2_USE_NEW_ABI
+		c->index = RVecRBinClass_length (&bf->bo->classes);
+		RVecRBinClass_push_back (&bf->bo->classes, c);
+		// free (c);
+		const int htidx = c->index + 1;
+		ht_pp_update (bf->bo->classes_ht, name, (void*)(size_t)htidx);
+// 		c = RVecRBinClass_last (&bf->bo->classes);
+// c = RVecRBinClass_at (&bf->bo->classes, 0);
+// return c;
+#else
 		// XXX. no need for a list, the ht is iterable too
 		c->index = r_list_length (bf->bo->classes);
 		r_list_append (bf->bo->classes, c);
 		ht_pp_insert (bf->bo->classes_ht, name, c);
+#endif
 	}
 	return c;
 }
 
 R_API RBinSymbol *r_bin_file_add_method(RBinFile *bf, const char *klass, const char *method, int nargs) {
-	r_return_val_if_fail (bf, NULL);
+	R_RETURN_VAL_IF_FAIL (bf, NULL);
 
 	RBinClass *c = r_bin_file_add_class (bf, klass, NULL, 0);
 	if (!c) {
